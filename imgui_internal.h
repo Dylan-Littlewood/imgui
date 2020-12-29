@@ -408,9 +408,10 @@ static inline float  ImLinearSweep(float current, float target, float speed)    
 static inline ImVec2 ImMul(const ImVec2& lhs, const ImVec2& rhs)                { return ImVec2(lhs.x * rhs.x, lhs.y * rhs.y); }
 
 // Helpers: Geometry
-IMGUI_API ImVec2     ImBezierCalc(const ImVec2& p1, const ImVec2& p2, const ImVec2& p3, const ImVec2& p4, float t);                                         // Cubic Bezier
-IMGUI_API ImVec2     ImBezierClosestPoint(const ImVec2& p1, const ImVec2& p2, const ImVec2& p3, const ImVec2& p4, const ImVec2& p, int num_segments);       // For curves with explicit number of segments
-IMGUI_API ImVec2     ImBezierClosestPointCasteljau(const ImVec2& p1, const ImVec2& p2, const ImVec2& p3, const ImVec2& p4, const ImVec2& p, float tess_tol);// For auto-tessellated curves you can use tess_tol = style.CurveTessellationTol
+IMGUI_API ImVec2     ImBezierCubicCalc(const ImVec2& p1, const ImVec2& p2, const ImVec2& p3, const ImVec2& p4, float t);
+IMGUI_API ImVec2     ImBezierCubicClosestPoint(const ImVec2& p1, const ImVec2& p2, const ImVec2& p3, const ImVec2& p4, const ImVec2& p, int num_segments);       // For curves with explicit number of segments
+IMGUI_API ImVec2     ImBezierCubicClosestPointCasteljau(const ImVec2& p1, const ImVec2& p2, const ImVec2& p3, const ImVec2& p4, const ImVec2& p, float tess_tol);// For auto-tessellated curves you can use tess_tol = style.CurveTessellationTol
+IMGUI_API ImVec2     ImBezierQuadraticCalc(const ImVec2& p1, const ImVec2& p2, const ImVec2& p3, float t);
 IMGUI_API ImVec2     ImLineClosestPoint(const ImVec2& a, const ImVec2& b, const ImVec2& p);
 IMGUI_API bool       ImTriangleContainsPoint(const ImVec2& a, const ImVec2& b, const ImVec2& c, const ImVec2& p);
 IMGUI_API ImVec2     ImTriangleClosestPoint(const ImVec2& a, const ImVec2& b, const ImVec2& c, const ImVec2& p);
@@ -1912,12 +1913,13 @@ struct IMGUI_API ImGuiWindow
     ImS8                    AutoFitChildAxises;
     bool                    AutoFitOnlyGrows;
     ImGuiDir                AutoPosLastDirection;
-    int                     HiddenFramesCanSkipItems;           // Hide the window for N frames
-    int                     HiddenFramesCannotSkipItems;        // Hide the window for N frames while allowing items to be submitted so we can measure their size
-    ImGuiCond               SetWindowPosAllowFlags;             // store acceptable condition flags for SetNextWindowPos() use.
-    ImGuiCond               SetWindowSizeAllowFlags;            // store acceptable condition flags for SetNextWindowSize() use.
-    ImGuiCond               SetWindowCollapsedAllowFlags;       // store acceptable condition flags for SetNextWindowCollapsed() use.
-    ImGuiCond               SetWindowDockAllowFlags;            // store acceptable condition flags for SetNextWindowDock() use.
+    ImS8                    HiddenFramesCanSkipItems;           // Hide the window for N frames
+    ImS8                    HiddenFramesCannotSkipItems;        // Hide the window for N frames while allowing items to be submitted so we can measure their size
+    ImS8                    HiddenFramesForRenderOnly;          // Hide the window until frame N at Render() time only
+    ImGuiCond               SetWindowPosAllowFlags : 8;         // store acceptable condition flags for SetNextWindowPos() use.
+    ImGuiCond               SetWindowSizeAllowFlags : 8;        // store acceptable condition flags for SetNextWindowSize() use.
+    ImGuiCond               SetWindowCollapsedAllowFlags : 8;   // store acceptable condition flags for SetNextWindowCollapsed() use.
+    ImGuiCond               SetWindowDockAllowFlags : 8;        // store acceptable condition flags for SetNextWindowDock() use.
     ImVec2                  SetWindowPosVal;                    // store window position when using a non-zero Pivot (position set needs to be processed when we know the window size)
     ImVec2                  SetWindowPosPivot;                  // store window pivot for positioning. ImVec2(0, 0) when positioning from top-left corner; ImVec2(0.5f, 0.5f) for centering; ImVec2(1, 1) for bottom right.
 
@@ -2115,8 +2117,7 @@ struct ImGuiTableColumn
 {
     ImRect                  ClipRect;                       // Clipping rectangle for the column
     ImGuiID                 UserID;                         // Optional, value passed to TableSetupColumn()
-    ImGuiTableColumnFlags   FlagsIn;                        // Flags as they were provided by user. See ImGuiTableColumnFlags_
-    ImGuiTableColumnFlags   Flags;                          // Effective flags. See ImGuiTableColumnFlags_
+    ImGuiTableColumnFlags   Flags;                          // Flags after some patching (not directly same as provided by user). See ImGuiTableColumnFlags_
     float                   MinX;                           // Absolute positions
     float                   MaxX;
     float                   InitStretchWeightOrWidth;       // Value passed to TableSetupColumn(). For Width it is a content width (_without padding_).
@@ -2148,9 +2149,12 @@ struct ImGuiTableColumn
     bool                    IsSkipItems;                    // Do we want item submissions to this column to be completely ignored (no layout will happen).
     bool                    IsPreserveWidthAuto;
     ImS8                    NavLayerCurrent;                // ImGuiNavLayer in 1 byte
-    ImS8                    SortDirection;                  // ImGuiSortDirection_Ascending or ImGuiSortDirection_Descending
     ImU8                    AutoFitQueue;                   // Queue of 8 values for the next 8 frames to request auto-fit
     ImU8                    CannotSkipItemsQueue;           // Queue of 8 values for the next 8 frames to disable Clipped/SkipItem
+    ImU8                    SortDirection : 2;              // ImGuiSortDirection_Ascending or ImGuiSortDirection_Descending
+    ImU8                    SortDirectionsAvailCount : 2;   // Number of available sort directions (0 to 3)
+    ImU8                    SortDirectionsAvailMask : 4;    // Mask of available sort directions (1-bit each)
+    ImU8                    SortDirectionsAvailList;        // Ordered of available sort directions (2-bits each)
 
     ImGuiTableColumn()
     {
@@ -2173,7 +2177,7 @@ struct ImGuiTableCellData
     ImGuiTableColumnIdx         Column;     // Column number
 };
 
-// FIXME-TABLES: transient data could be stored in a per-stacked table structure: DrawSplitter, SortSpecs, incoming RowData
+// FIXME-TABLE: transient data could be stored in a per-stacked table structure: DrawSplitter, SortSpecs, incoming RowData
 struct ImGuiTable
 {
     ImGuiID                     ID;
@@ -2219,16 +2223,19 @@ struct ImGuiTable
     float                       ColumnsTotalWidth;          // Sum of current column width
     float                       ColumnsAutoFitWidth;        // Sum of ideal column width in order nothing to be clipped, used for auto-fitting and content width submission in outer window
     float                       ResizedColumnNextWidth;
+    float                       ResizeLockMinContentsX2;    // Lock minimum contents width while resizing down in order to not create feedback loops. But we allow growing the table.
     float                       RefScale;                   // Reference scale to be able to rescale columns on font/dpi changes.
-    ImRect                      OuterRect;                  // Note: OuterRect.Max.y is often FLT_MAX until EndTable(), unless a height has been specified in BeginTable().
+    ImRect                      OuterRect;                  // Note: for non-scrolling table, OuterRect.Max.y is often FLT_MAX until EndTable(), unless a height has been specified in BeginTable().
+    ImRect                      InnerRect;                  // InnerRect but without decoration. As with OuterRect, for non-scrolling tables, InnerRect.Max.y is 
     ImRect                      WorkRect;
     ImRect                      InnerClipRect;
     ImRect                      BgClipRect;                 // We use this to cpu-clip cell background color fill
-    ImRect                      BgClipRectForDrawCmd;
+    ImRect                      Bg0ClipRectForDrawCmd;      // Actual ImDrawCmd clip rect for BG0/1 channel. This tends to be == OuterWindow->ClipRect at BeginTable() because output in BG0/BG1 is cpu-clipped
+    ImRect                      Bg2ClipRectForDrawCmd;      // Actual ImDrawCmd clip rect for BG2 channel. This tends to be a correct, tight-fit, because output to BG2 are done by widgets relying on regular ClipRect.
     ImRect                      HostClipRect;               // This is used to check if we can eventually merge our columns draw calls into the current draw call of the current window.
     ImRect                      HostBackupWorkRect;         // Backup of InnerWindow->WorkRect at the end of BeginTable()
     ImRect                      HostBackupParentWorkRect;   // Backup of InnerWindow->ParentWorkRect at the end of BeginTable()
-    ImRect                      HostBackupClipRect;         // Backup of InnerWindow->ClipRect during PushTableBackground()/PopTableBackground()
+    ImRect                      HostBackupInnerClipRect;    // Backup of InnerWindow->ClipRect during PushTableBackground()/PopTableBackground()
     ImVec2                      HostBackupPrevLineSize;     // Backup of InnerWindow->DC.PrevLineSize at the end of BeginTable()
     ImVec2                      HostBackupCurrLineSize;     // Backup of InnerWindow->DC.CurrLineSize at the end of BeginTable()
     ImVec2                      HostBackupCursorMaxPos;     // Backup of InnerWindow->DC.CursorMaxPos at the end of BeginTable()
@@ -2254,8 +2261,9 @@ struct ImGuiTable
     ImGuiTableColumnIdx         HeldHeaderColumn;           // Index of column header being held.
     ImGuiTableColumnIdx         ReorderColumn;              // Index of column being reordered. (not cleared)
     ImGuiTableColumnIdx         ReorderColumnDir;           // -1 or +1
+    ImGuiTableColumnIdx         LeftMostStretchedColumn;    // Index of left-most stretched column.
+    ImGuiTableColumnIdx         RightMostStretchedColumn;   // Index of right-most stretched column.
     ImGuiTableColumnIdx         RightMostEnabledColumn;     // Index of right-most non-hidden column.
-    ImGuiTableColumnIdx         LeftMostStretchedColumnDisplayOrder; // Display order of left-most stretched column.
     ImGuiTableColumnIdx         ContextPopupColumn;         // Column right-clicked on, of -1 if opening context menu from a neutral/empty spot
     ImGuiTableColumnIdx         FreezeRowsRequest;          // Requested frozen rows count
     ImGuiTableColumnIdx         FreezeRowsCount;            // Actual frozen row count (== FreezeRowsRequest, or == 0 when no scrolling offset)
@@ -2263,8 +2271,8 @@ struct ImGuiTable
     ImGuiTableColumnIdx         FreezeColumnsCount;         // Actual frozen columns count (== FreezeColumnsRequest, or == 0 when no scrolling offset)
     ImGuiTableColumnIdx         RowCellDataCurrent;         // Index of current RowCellData[] entry in current row
     ImGuiTableDrawChannelIdx    DummyDrawChannel;           // Redirect non-visible columns here.
-    ImGuiTableDrawChannelIdx    Bg1DrawChannelCurrent;      // For Selectable() and other widgets drawing accross columns after the freezing line. Index within DrawSplitter.Channels[]
-    ImGuiTableDrawChannelIdx    Bg1DrawChannelUnfrozen;
+    ImGuiTableDrawChannelIdx    Bg2DrawChannelCurrent;      // For Selectable() and other widgets drawing accross columns after the freezing line. Index within DrawSplitter.Channels[]
+    ImGuiTableDrawChannelIdx    Bg2DrawChannelUnfrozen;
     bool                        IsLayoutLocked;             // Set by TableUpdateLayout() which is called when beginning the first row.
     bool                        IsInsideRow;                // Set when inside TableBeginRow()/TableEndRow().
     bool                        IsInitializing;
@@ -2277,11 +2285,12 @@ struct ImGuiTable
     bool                        IsResetAllRequest;
     bool                        IsResetDisplayOrderRequest;
     bool                        IsUnfrozen;                 // Set when we got past the frozen row.
+    bool                        IsOuterRectAutoFitX;        // Set when outer_size.x == 0.0f in BeginTable(), scrolling is disabled, and there are stretch columns.
     bool                        MemoryCompacted;
     bool                        HostSkipItems;              // Backup of InnerWindow->SkipItem at the end of BeginTable(), because we will overwrite InnerWindow->SkipItem on a per-column basis
 
-    IMGUI_API ImGuiTable();
-    IMGUI_API ~ImGuiTable();
+    IMGUI_API ImGuiTable()      { memset(this, 0, sizeof(*this)); LastFrameActive = -1; }
+    IMGUI_API ~ImGuiTable()     { IM_FREE(RawData); }
 };
 
 // sizeof() ~ 12
@@ -2550,7 +2559,6 @@ namespace ImGui
     // Tables: Candidates for public API
     IMGUI_API void          TableOpenContextMenu(int column_n = -1);
     IMGUI_API void          TableSetColumnWidth(int column_n, float width);
-    IMGUI_API void          TableSetColumnIsEnabled(int column_n, bool enabled);
     IMGUI_API void          TableSetColumnSortDirection(int column_n, ImGuiSortDirection sort_direction, bool append_to_sort_specs);
     IMGUI_API int           TableGetHoveredColumn(); // May use (TableGetColumnFlags() & ImGuiTableColumnFlags_IsHovered) instead. Return hovered column. return -1 when table is not hovered. return columns_count if the unused space at the right of visible columns is hovered.
     IMGUI_API float         TableGetHeaderRowHeight();
@@ -2565,12 +2573,14 @@ namespace ImGui
     IMGUI_API void          TableSetupDrawChannels(ImGuiTable* table);
     IMGUI_API void          TableUpdateLayout(ImGuiTable* table);
     IMGUI_API void          TableUpdateBorders(ImGuiTable* table);
+    IMGUI_API void          TableUpdateColumnsWeightFromWidth(ImGuiTable* table);
     IMGUI_API void          TableDrawBorders(ImGuiTable* table);
     IMGUI_API void          TableDrawContextMenu(ImGuiTable* table);
     IMGUI_API void          TableMergeDrawChannels(ImGuiTable* table);
     IMGUI_API void          TableSortSpecsSanitize(ImGuiTable* table);
     IMGUI_API void          TableSortSpecsBuild(ImGuiTable* table);
-    IMGUI_API void          TableFixColumnSortDirection(ImGuiTableColumn* column);
+    IMGUI_API ImGuiSortDirection TableGetColumnNextSortDirection(ImGuiTableColumn* column);
+    IMGUI_API void          TableFixColumnSortDirection(ImGuiTable* table, ImGuiTableColumn* column);
     IMGUI_API void          TableBeginRow(ImGuiTable* table);
     IMGUI_API void          TableEndRow(ImGuiTable* table);
     IMGUI_API void          TableBeginCell(ImGuiTable* table, int column_n);
@@ -2578,6 +2588,8 @@ namespace ImGui
     IMGUI_API ImRect        TableGetCellBgRect(const ImGuiTable* table, int column_n);
     IMGUI_API const char*   TableGetColumnName(const ImGuiTable* table, int column_n);
     IMGUI_API ImGuiID       TableGetColumnResizeID(const ImGuiTable* table, int column_n, int instance_no = 0);
+    IMGUI_API float         TableGetMinColumnWidth();
+    IMGUI_API float         TableGetMaxColumnWidth(const ImGuiTable* table, int column_n);
     IMGUI_API void          TableSetColumnWidthAutoSingle(ImGuiTable* table, int column_n);
     IMGUI_API void          TableSetColumnWidthAutoAll(ImGuiTable* table);
     IMGUI_API void          TableRemove(ImGuiTable* table);
